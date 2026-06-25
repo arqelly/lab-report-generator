@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import type { FileUploadResponse } from './types';
 import {
     Container,
     AppBar,
@@ -21,17 +22,6 @@ import { StatisticsView } from './components/StatisticsView';
 import { PlotBuilder } from './components/PlotBuilder';
 import { ReportForm } from './components/ReportForm';
 
-// Типы
-interface FileUploadResponse {
-    filename: string;
-    columns: string[];
-    numeric_columns: string[];
-    preview: Record<string, any>[];
-    shape: [number, number];
-    message: string;
-}
-
-// Создаем клиент для React Query
 const queryClient = new QueryClient({
     defaultOptions: {
         queries: {
@@ -93,15 +83,14 @@ function App() {
         <ThemeProvider theme={theme}>
             <CssBaseline />
             <QueryClientProvider client={queryClient}>
-                <Container maxWidth="xl">
-                    <AppBar position="static" color="primary" sx={{ mb: 3, borderRadius: 1 }}>
+                <Container maxWidth="xl" disableGutters sx={{ px: { xs: 1, md: 3 } }}>
+                    <AppBar position="static" color="default" elevation={0}>
                         <Toolbar>
-                            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-                                📊 Генератор отчетов для лабораторных работ
+                            <Typography variant="h6" component="div" sx={{ flexGrow: 1, fontWeight: 500 }}>
+                                Конструктор инфографики
                             </Typography>
                         </Toolbar>
                     </AppBar>
-
                     <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper', borderRadius: 1 }}>
                         <Tabs value={currentTab} onChange={handleTabChange} variant="fullWidth">
                             <Tab label="📁 Загрузка данных" />
