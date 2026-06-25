@@ -33,9 +33,9 @@ export const ReportForm: React.FC<ReportFormProps> = ({ onSuccess, onError }) =>
 
     const reportMutation = useMutation({
         mutationFn: api.generateReport,
-        onSuccess: (data) => {
-            onSuccess('Отчет успешно сгенерирован');
-            api.downloadReport(data.report_path.split('/').pop() || '');
+        onSuccess: (data) => { 
+            onSuccess(data.message);
+            api.downloadReport(data.download_url); 
         },
         onError: (error: Error) => {
             onError(error.message);
