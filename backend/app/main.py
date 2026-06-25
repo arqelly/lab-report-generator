@@ -1,162 +1,211 @@
+from pathlib import Path
+import time
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-from typing import List, Optional
-import os
-import shutil
-from datetime import datetime
-
 from .models import (
-    FileUploadResponse, StatisticsResponse, PlotRequest,
-    ReportRequest, ReportResponse
+    FileUploadResponse,
+    PlotRequest,
+    ReportRequest,
+    ReportResponse
 )
 from .processor import processor
 
-# Создание приложения
+
+UPLOAD_DIR = Path("uploads")# Тася, это штука создаёт папку, её отсюда никуда не убирать, а то первый отчёт не сохранится
+UPLOAD_DIR.mkdir(exist_ok=True)
+ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".txt"}
+
+
 app = FastAPI(
-    title="Lab Report Generator API",
-    description="API для автоматической генерации отчетов по лабораторным работам",
+    title="Конструктор инфографики",
+    description="Сервис для обработки экспериментальных данных и создания отчётов",
     version="1.0.0"
 )
 
-# Настройка CORS [citation:6][citation:9]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # React dev servers
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
-# Создание директории для загрузок
-os.makedirs("uploads", exist_ok=True)
-
-# Монтирование статических файлов (для доступа к сгенерированным отчетам)
-app.mount("/reports", StaticFiles(directory="uploads"), name="reports")
 
 @app.get("/")
 async def root():
-    """Корневой эндпоинт для проверки работы API"""
     return {
-        "message": "Lab Report Generator API",
+        "message": "Конструктор инфографики работает",
         "docs": "/docs",
         "version": "1.0.0"
     }
 
+
 @app.post("/api/upload", response_model=FileUploadResponse)
 async def upload_file(file: UploadFile = File(...)):
-    """
-    Загрузка файла с экспериментальными данными.
-    
-    Поддерживаемые форматы: CSV, Excel (xlsx, xls), TXT
-    """
+    if not file.filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Не указано имя файла"
+        )
+
+    extension = Path(file.filename).suffix.lower()
+
+    if extension not in ALLOWED_EXTENSIONS:
+        allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Неподдерживаемый формат файла. Разрешены: {allowed}"
+        )
+
     try:
-        # Проверка расширения файла
-        allowed_extensions = ['.csv', '.xlsx', '.xls', '.txt']
-        file_ext = os.path.splitext(file.filename)[1].lower()
-        
-        if file_ext not in allowed_extensions:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Неподдерживаемый формат файла. Разрешены: {', '.join(allowed_extensions)}"
-            )
-        
-        # Загрузка данных
         data = await processor.load_file(file)
-        
-        # Получение информации
         columns_info = processor.get_columns_info()
-        preview = processor.get_preview()
-        
+
         return FileUploadResponse(
             filename=file.filename,
             columns=columns_info["columns"],
             numeric_columns=columns_info["numeric_columns"],
-            preview=preview,
+            preview=processor.get_preview(),
             shape=[data.shape[0], data.shape[1]]
         )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+    except HTTPException:
+        raise
+
+    except (ValueError, UnicodeDecodeError) as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Не удалось прочитать файл: {error}"
+        )
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ошибка при обработке файла: {error}"
+        )
+
 
 @app.get("/api/statistics")
 async def get_statistics():
-    """Получение статистических показателей для всех числовых колонок"""
     try:
-        stats = processor.calculate_statistics()
-        if not stats:
+        statistics = processor.calculate_statistics()
+
+        if not statistics:
             raise HTTPException(
                 status_code=400,
-                detail="Нет загруженных данных или отсутствуют числовые колонки"
+                detail="В файле нет числовых столбцов"
             )
-        return stats
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+        return statistics
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Не удалось рассчитать статистику: {error}"
+        )
+
 
 @app.post("/api/plot")
 async def create_plot(plot_request: PlotRequest):
-    """Создание интерактивного графика"""
     try:
-        plot_data = processor.create_plot(
+        return processor.create_plot(
             x_col=plot_request.x_column,
             y_col=plot_request.y_column,
             plot_type=plot_request.plot_type
         )
-        return plot_data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Не удалось построить график: {error}"
+        )
+
 
 @app.post("/api/generate-report", response_model=ReportResponse)
 async def generate_report(
     report_request: ReportRequest,
     background_tasks: BackgroundTasks
 ):
-    """Генерация отчета в формате Word"""
     try:
-        # Генерация отчета
-        report_path = processor.generate_report_word(report_request.dict())
-        
-        # Получение имени файла
-        filename = os.path.basename(report_path)
-        
-        # Фоновая задача: удаление старых файлов (опционально)
-        background_tasks.add_task(cleanup_old_files, days=7)
-        
-        return ReportResponse(
-            report_path=report_path,
-            download_url=f"/reports/{filename}",
-            message="Отчет успешно сгенерирован"
+        report_data = report_request.model_dump()
+
+        report_path = Path(
+            processor.generate_report_word(report_data)
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+        background_tasks.add_task(cleanup_old_files, 7)
+
+        return ReportResponse(
+            report_path=str(report_path),
+            download_url=f"/api/download/{report_path.name}",
+            message="Отчёт успешно создан"
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Не удалось создать отчёт: {error}"
+        )
+
 
 @app.get("/api/download/{filename}")
 async def download_report(filename: str):
-    """Скачивание сгенерированного отчета"""
-    file_path = f"uploads/{filename}"
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Файл не найден")
-    
+    safe_filename = Path(filename).name
+
+    if safe_filename != filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Некорректное имя файла"
+        )
+    # в адрессе должно быть только имя отчёта, если в имени вылезут какие то пути или что то такое, то ошибки будут
+    file_path = UPLOAD_DIR / safe_filename
+
+    if not file_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Отчёт не найден"
+        )
+
     return FileResponse(
-        file_path,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=filename
+        path=file_path,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document"
+        ),
+        filename=safe_filename
     )
 
-def cleanup_old_files(days: int = 7):
-    """Удаление файлов старше указанного количества дней"""
-    import time
-    now = time.time()
-    
-    for filename in os.listdir("uploads"):
-        filepath = os.path.join("uploads", filename)
-        if os.path.isfile(filepath):
-            # Если файл старше days дней
-            if os.stat(filepath).st_mtime < now - days * 86400:
-                os.remove(filepath)
 
-# Запуск сервера (для разработки)
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+def cleanup_old_files(days: int = 7):
+    oldest_allowed_time = time.time() - days * 24 * 60 * 60
+
+    for file_path in UPLOAD_DIR.iterdir():
+        try:
+            if (
+                file_path.is_file()
+                and file_path.stat().st_mtime < oldest_allowed_time
+            ):
+                file_path.unlink()
+        except OSError:
+            # я вот это добавила чтобы одна ошибка всё не руинила
+            continue
